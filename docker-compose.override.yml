@@ -1,0 +1,27 @@
+version: "3.9"
+
+# Local dev overrides — auto-merged by Docker Compose when running `docker compose up`.
+# In prod, skip this file: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+
+services:
+  traefik:
+    networks:
+      orderbox_net:
+        aliases:
+          - api.orderbox.test
+
+  db:
+    networks:
+      - orderbox_net
+
+  wordpress:
+    volumes:
+      - ./mu-plugins:/var/www/html/wp-content/mu-plugins
+    labels:
+      - "traefik.http.routers.wp.rule=Host(`orderbox.test`)"
+    networks:
+      - orderbox_net
+
+networks:
+  orderbox_net:
+    external: true

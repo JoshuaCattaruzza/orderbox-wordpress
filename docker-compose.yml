@@ -7,15 +7,10 @@ services:
     container_name: traefik
     restart: unless-stopped
     command:
-      - "--api.insecure=true"                 # optional dashboard on 8080
+      - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=joshua.cattaruzza@gmail.com" # replace with your email
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
     ports:
       - "80:80"
       - "443:443"
@@ -55,10 +50,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.wp.rule=Host(`orderbox.me`)"
-      - "traefik.http.routers.wp.entrypoints=websecure"
-      - "traefik.http.routers.wp.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.wp.middlewares=redirect-to-https@docker"
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.wp.entrypoints=web"
 
 volumes:
   db_data:
