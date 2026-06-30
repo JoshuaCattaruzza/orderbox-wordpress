@@ -122,11 +122,14 @@ add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
 				.then(function (data) {
 					if (!data) return;
 
-					if (data.status === 'ACCEPTED' || data.status === 'PRINTED' || data.status === 'COMPLETED') {
+					if (data.status === 'COMPLETED') {
+						text.innerHTML = '&#10003; Your order is ready!';
+						applyStyle('#f0faf0', '#4caf50', '#1b5e20');
+						clearInterval(timer);
+					} else if (data.status === 'ACCEPTED' || data.status === 'PRINTED') {
 						var eta = data.eta_minutes ? ' Estimated preparation time: <strong>' + data.eta_minutes + ' minutes</strong>.' : '';
 						text.innerHTML = '&#10003; Your order has been confirmed!' + eta;
 						applyStyle('#f0faf0', '#4caf50', '#1b5e20');
-						clearInterval(timer);
 					} else if (data.status === 'CANCELLED') {
 						var amount = data.total_amount ? ' of &pound;' + parseFloat(data.total_amount).toFixed(2) : '';
 						text.innerHTML = 'Unfortunately your order was declined. A refund' + amount + ' has been initiated and will appear within 3&ndash;5 business days.';
