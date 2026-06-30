@@ -176,7 +176,7 @@ add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
 		width: 72px;
 		height: 72px;
 		border: 7px solid #e8e8e8;
-		border-top-color: #ff6b00;
+		border-top-color: #1a73e8;
 		border-radius: 50%;
 		animation: ob-spin 0.85s linear infinite;
 		flex-shrink: 0;
