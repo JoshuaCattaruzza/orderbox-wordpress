@@ -90,6 +90,42 @@ add_filter( 'woocommerce_add_to_cart_validation', function ( bool $passed ): boo
 	return $passed;
 }, 10, 1 );
 
+// ── Order type pre-selection ──────────────────────────────────────────────────
+// The order-type page links to /menu?order_type=delivery|collection.
+// We persist that choice in a cookie and use it to pre-select the right
+// WooCommerce shipping method at checkout so the customer doesn't have to
+// choose again.
+
+// Capture ?order_type= from the URL and store it in a cookie.
+add_action( 'wp', function () {
+	if ( isset( $_GET['order_type'] ) ) {
+		$type = sanitize_key( $_GET['order_type'] );
+		if ( in_array( $type, [ 'delivery', 'collection' ], true ) ) {
+			setcookie( 'orderbox_order_type', $type, 0, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true );
+			$_COOKIE['orderbox_order_type'] = $type;
+		}
+	}
+} );
+
+// Pre-select the matching shipping method at checkout based on the cookie.
+// flat_rate:2 = Delivery, local_pickup:1 = Collection.
+add_filter( 'woocommerce_shipping_chosen_method', function ( $default, $rates ) {
+	$type = $_COOKIE['orderbox_order_type'] ?? '';
+	if ( ! $type ) return $default;
+
+	$prefer = $type === 'delivery' ? 'flat_rate' : 'local_pickup';
+	foreach ( $rates as $rate_id => $rate ) {
+		if ( $rate->method_id === $prefer ) return $rate_id;
+	}
+	return $default;
+}, 10, 2 );
+
+// Clear the cookie once the order is placed.
+add_action( 'woocommerce_thankyou', function () {
+	setcookie( 'orderbox_order_type', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true );
+	unset( $_COOKIE['orderbox_order_type'] );
+} );
+
 // ── Order tracking banner ──────────────────────────────────────────────────────
 /**
  * Inject a live status banner above the standard WooCommerce thank you page.
