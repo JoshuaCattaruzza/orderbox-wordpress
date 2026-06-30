@@ -15,10 +15,10 @@ if ( isset( $_SERVER['HTTP_HOST'] ) && $_SERVER['HTTP_HOST'] === 'wp_app' ) {
 }
 
 // ── Pause / resume ────────────────────────────────────────────────────────────
-// These constants can be overridden in wp-config.php for production.
-// Local dev defaults point to the orderbox_api container on the shared Docker network.
-if ( ! defined( 'ORDERBOX_API_URL' ) )   define( 'ORDERBOX_API_URL',   'http://orderbox_api:3000' );
-if ( ! defined( 'ORDERBOX_SUBDOMAIN' ) ) define( 'ORDERBOX_SUBDOMAIN', 'demo' );
+// Config is read from environment variables, with wp-config.php constants as
+// an override and sensible local-dev defaults as the final fallback.
+if ( ! defined( 'ORDERBOX_API_URL' ) )   define( 'ORDERBOX_API_URL',   getenv( 'ORDERBOX_API_URL' )   ?: 'http://orderbox_api:3000' );
+if ( ! defined( 'ORDERBOX_SUBDOMAIN' ) ) define( 'ORDERBOX_SUBDOMAIN', getenv( 'ORDERBOX_SUBDOMAIN' ) ?: 'demo' );
 
 /**
  * Returns true if the restaurant is currently paused.

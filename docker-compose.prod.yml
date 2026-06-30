@@ -17,6 +17,11 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
 
   wordpress:
+    environment:
+      ORDERBOX_API_URL: https://orderbox-api-3e2wtmanta-nw.a.run.app
+      ORDERBOX_SUBDOMAIN: rajmahal
+    volumes:
+      - ./mu-plugins:/var/www/html/wp-content/mu-plugins
     labels:
       - "traefik.http.routers.wp.entrypoints=websecure"
       - "traefik.http.routers.wp.tls.certresolver=letsencrypt"
