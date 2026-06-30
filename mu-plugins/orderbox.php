@@ -97,12 +97,17 @@ add_filter( 'woocommerce_add_to_cart_validation', function ( bool $passed ): boo
 // choose again.
 
 // Capture ?order_type= from the URL and store it in a cookie.
+// Also clear the WC session's cached shipping choice so the filter below
+// can re-apply — otherwise WC reuses the previous session value.
 add_action( 'wp', function () {
 	if ( isset( $_GET['order_type'] ) ) {
 		$type = sanitize_key( $_GET['order_type'] );
 		if ( in_array( $type, [ 'delivery', 'collection' ], true ) ) {
 			setcookie( 'orderbox_order_type', $type, 0, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true );
 			$_COOKIE['orderbox_order_type'] = $type;
+			if ( function_exists( 'WC' ) && WC()->session ) {
+				WC()->session->set( 'chosen_shipping_methods', [] );
+			}
 		}
 	}
 } );
