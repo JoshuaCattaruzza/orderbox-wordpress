@@ -14,6 +14,10 @@ if ( isset( $_SERVER['HTTP_HOST'] ) && $_SERVER['HTTP_HOST'] === 'wp_app' ) {
 	$_SERVER['HTTPS'] = 'on';
 }
 
+// Deliver WooCommerce webhooks synchronously so orders reach the OrderBox API
+// immediately on checkout, not on the next page load via Action Scheduler.
+add_filter( 'woocommerce_webhook_deliver_async', '__return_false' );
+
 // ── Pause / resume ────────────────────────────────────────────────────────────
 // Config is read from environment variables, with wp-config.php constants as
 // an override and sensible local-dev defaults as the final fallback.
