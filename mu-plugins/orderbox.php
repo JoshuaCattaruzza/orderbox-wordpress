@@ -85,3 +85,61 @@ add_filter( 'woocommerce_add_to_cart_validation', function ( bool $passed ): boo
 	}
 	return $passed;
 }, 10, 1 );
+
+// ── Order tracking banner ──────────────────────────────────────────────────────
+/**
+ * Inject a live status banner above the standard WooCommerce thank you page.
+ * Polls the OrderBox tracking endpoint every 5 seconds until a terminal status
+ * (ACCEPTED or CANCELLED) is reached.
+ */
+add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
+	$order     = wc_get_order( $order_id );
+	$order_key = $order ? $order->get_order_key() : '';
+	$api_url   = rtrim( ORDERBOX_API_URL, '/' );
+	$subdomain = ORDERBOX_SUBDOMAIN;
+
+	?>
+	<div id="orderbox-status-banner" style="margin-bottom:24px;padding:18px 22px;border-radius:6px;border:2px solid #e0e0e0;background:#fafafa;font-size:15px;line-height:1.5;">
+		<span id="orderbox-status-text">Waiting for the restaurant to confirm your order&hellip;</span>
+	</div>
+
+	<script>
+	(function () {
+		var banner  = document.getElementById('orderbox-status-banner');
+		var text    = document.getElementById('orderbox-status-text');
+		var url     = <?php echo json_encode( $api_url . '/track/' . $subdomain . '/' . $order_id . '?key=' . $order_key ); ?>;
+		var timer;
+
+		function applyStyle(bg, border, color) {
+			banner.style.background  = bg;
+			banner.style.borderColor = border;
+			banner.style.color       = color || '#000';
+		}
+
+		function poll() {
+			fetch(url)
+				.then(function (r) { return r.ok ? r.json() : null; })
+				.then(function (data) {
+					if (!data) return;
+
+					if (data.status === 'ACCEPTED' || data.status === 'PRINTED' || data.status === 'COMPLETED') {
+						var eta = data.eta_minutes ? ' Estimated preparation time: <strong>' + data.eta_minutes + ' minutes</strong>.' : '';
+						text.innerHTML = '&#10003; Your order has been confirmed!' + eta;
+						applyStyle('#f0faf0', '#4caf50', '#1b5e20');
+						clearInterval(timer);
+					} else if (data.status === 'CANCELLED') {
+						var amount = data.total_amount ? ' of &pound;' + parseFloat(data.total_amount).toFixed(2) : '';
+						text.innerHTML = 'Unfortunately your order was declined. A refund' + amount + ' has been initiated and will appear within 3&ndash;5 business days.';
+						applyStyle('#fff5f5', '#e53935', '#7f0000');
+						clearInterval(timer);
+					}
+				})
+				.catch(function () { /* network blip — keep polling */ });
+		}
+
+		timer = setInterval(poll, 5000);
+		poll();
+	})();
+	</script>
+	<?php
+} );
