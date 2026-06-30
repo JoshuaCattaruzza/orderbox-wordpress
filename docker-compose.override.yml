@@ -1,27 +1,44 @@
 version: "3.9"
 
 # Local dev overrides — auto-merged by Docker Compose when running `docker compose up`.
-# In prod, skip this file: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+# In prod, skip this file and use docker-compose.https.yml instead.
 
 services:
   traefik:
+    image: traefik:v2.11
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    labels:
+      - "traefik.enable=true"
     networks:
-      orderbox_net:
+      traefik_proxy:
         aliases:
           - api.orderbox.test
 
-  db:
-    networks:
-      - orderbox_net
-
   wordpress:
-    volumes:
-      - ./mu-plugins:/var/www/html/wp-content/mu-plugins
+    depends_on:
+      - traefik
     labels:
-      - "traefik.http.routers.wp.rule=Host(`orderbox.test`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.wp-${SUBDOMAIN:-demo}.rule=Host(`orderbox.test`)"
+      - "traefik.http.routers.wp-${SUBDOMAIN:-demo}.entrypoints=web"
+      - "traefik.docker.network=orderbox_net"
     networks:
-      - orderbox_net
+      - default
+      - traefik_proxy
 
 networks:
-  orderbox_net:
+  traefik_proxy:
+    name: orderbox_net
     external: true

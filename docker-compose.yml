@@ -1,57 +1,41 @@
 version: "3.9"
 
+# Multi-tenant WordPress template.
+# All tenant-specific values come from a .env file — see .env.example.
+# Local dev:  docker compose up  (auto-merges docker-compose.override.yml)
+# Production: docker compose -f docker-compose.yml -f docker-compose.https.yml \
+#               --env-file /opt/orderbox-wp-<subdomain>/.env -p <subdomain> up -d
+
 services:
-
-  traefik:
-    image: traefik:v2.11
-    container_name: traefik
-    restart: unless-stopped
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8080:8080"  # optional dashboard
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "./traefik/acme.json:/letsencrypt/acme.json"
-    labels:
-      - "traefik.enable=true"
-
   db:
     image: mysql:8.0
-    container_name: wp_db
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: wordpress
       MYSQL_USER: wordpress
-      MYSQL_PASSWORD: wordpress
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_PASSWORD: ${DB_PASSWORD:-wordpress}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
     volumes:
       - db_data:/var/lib/mysql
 
   wordpress:
     image: europe-west2-docker.pkg.dev/orderbox-487000/orderbox-images/orderbox-wordpress-base
-    container_name: wp_app
     depends_on:
       - db
-      - traefik
     restart: unless-stopped
     environment:
       WORDPRESS_DB_HOST: db:3306
       WORDPRESS_DB_USER: wordpress
-      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-wordpress}
       WORDPRESS_DB_NAME: wordpress
+      ORDERBOX_API_URL: ${ORDERBOX_API_URL:-http://orderbox_api:3000}
+      ORDERBOX_SUBDOMAIN: ${SUBDOMAIN:-demo}
     volumes:
       - wp_data:/var/www/html
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.wp.rule=Host(`orderbox.me`)"
-      - "traefik.http.routers.wp.entrypoints=web"
+      - ${MU_PLUGINS_PATH:-./mu-plugins}:/var/www/html/wp-content/mu-plugins
 
 volumes:
-  db_data:
   wp_data:
+    name: wp_${SUBDOMAIN:-demo}_data
+  db_data:
+    name: db_${SUBDOMAIN:-demo}_data

@@ -1,0 +1,20 @@
+version: "3.9"
+
+# Production TLS — include alongside docker-compose.yml when deploying to the VM.
+# docker compose -f docker-compose.yml -f docker-compose.https.yml \
+#   --env-file /opt/orderbox-wp-<subdomain>/.env -p <subdomain> up -d
+
+services:
+  wordpress:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wp-${SUBDOMAIN}.rule=Host(`${SUBDOMAIN}.orderbox.me`)"
+      - "traefik.http.routers.wp-${SUBDOMAIN}.entrypoints=websecure"
+      - "traefik.http.routers.wp-${SUBDOMAIN}.tls.certresolver=letsencrypt"
+      - "traefik.docker.network=traefik_proxy"
+    networks:
+      - traefik_proxy
+
+networks:
+  traefik_proxy:
+    external: true
