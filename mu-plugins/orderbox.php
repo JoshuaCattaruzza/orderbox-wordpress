@@ -133,9 +133,9 @@ add_action( 'woocommerce_thankyou', function () {
 
 // ── Order tracking banner ──────────────────────────────────────────────────────
 /**
- * Inject a live status banner above the standard WooCommerce thank you page.
- * Polls the OrderBox tracking endpoint every 5 seconds until a terminal status
- * (ACCEPTED or CANCELLED) is reached.
+ * Full-page pending overlay while the restaurant hasn't responded yet.
+ * Swaps to an inline result banner once the order is confirmed or declined.
+ * Polls every 5 seconds until a terminal status is reached.
  */
 add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
 	$order     = wc_get_order( $order_id );
@@ -144,21 +144,82 @@ add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
 	$subdomain = ORDERBOX_SUBDOMAIN;
 
 	?>
-	<div id="orderbox-status-banner" style="margin-bottom:24px;padding:18px 22px;border-radius:6px;border:2px solid #e0e0e0;background:#fafafa;font-size:15px;line-height:1.5;">
-		<span id="orderbox-status-text">Waiting for the restaurant to confirm your order&hellip;</span>
+	<style>
+	#ob-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 99999;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		background: rgba(255,255,255,0.93);
+		gap: 28px;
+	}
+	#ob-overlay p {
+		margin: 0;
+		font-size: 18px;
+		font-weight: 600;
+		color: #333;
+		text-align: center;
+		line-height: 1.5;
+	}
+	#ob-overlay small {
+		display: block;
+		font-size: 13px;
+		font-weight: 400;
+		color: #888;
+		margin-top: 6px;
+	}
+	@keyframes ob-spin { to { transform: rotate(360deg); } }
+	.ob-spinner {
+		width: 72px;
+		height: 72px;
+		border: 7px solid #e8e8e8;
+		border-top-color: #ff6b00;
+		border-radius: 50%;
+		animation: ob-spin 0.85s linear infinite;
+		flex-shrink: 0;
+	}
+	#ob-result {
+		display: none;
+		margin-bottom: 24px;
+		padding: 18px 22px;
+		border-radius: 6px;
+		border: 2px solid #e0e0e0;
+		font-size: 15px;
+		line-height: 1.5;
+	}
+	</style>
+
+	<div id="ob-overlay">
+		<div class="ob-spinner"></div>
+		<p>
+			Waiting for the restaurant to confirm your order&hellip;
+			<small>This usually takes less than a minute.</small>
+		</p>
 	</div>
+
+	<div id="ob-result"></div>
 
 	<script>
 	(function () {
-		var banner  = document.getElementById('orderbox-status-banner');
-		var text    = document.getElementById('orderbox-status-text');
+		var overlay = document.getElementById('ob-overlay');
+		var result  = document.getElementById('ob-result');
 		var url     = <?php echo json_encode( $api_url . '/track/' . $subdomain . '/' . $order_id . '?key=' . $order_key ); ?>;
 		var timer;
+		var resolved = false;
 
-		function applyStyle(bg, border, color) {
-			banner.style.background  = bg;
-			banner.style.borderColor = border;
-			banner.style.color       = color || '#000';
+		function resolve(html, bg, border, color) {
+			if (resolved) return;
+			resolved = true;
+			clearInterval(timer);
+			overlay.style.display = 'none';
+			result.style.display  = 'block';
+			result.style.background   = bg;
+			result.style.borderColor  = border;
+			result.style.color        = color || '#000';
+			result.innerHTML = html;
 		}
 
 		function poll() {
@@ -168,25 +229,24 @@ add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
 					if (!data) return;
 
 					if (data.status === 'COMPLETED') {
-						text.innerHTML = '&#10003; Your order is ready!';
-						applyStyle('#f0faf0', '#4caf50', '#1b5e20');
-						clearInterval(timer);
+						resolve('&#10003; Your order is ready!', '#f0faf0', '#4caf50', '#1b5e20');
 					} else if (data.status === 'ACCEPTED' || data.status === 'PRINTED') {
-						var eta = data.eta_minutes ? ' Estimated preparation time: <strong>' + data.eta_minutes + ' minutes</strong>.' : '';
-						text.innerHTML = '&#10003; Your order has been confirmed!' + eta;
-						applyStyle('#f0faf0', '#4caf50', '#1b5e20');
+						var eta = data.eta_minutes
+							? ' Estimated preparation time: <strong>' + data.eta_minutes + ' minutes</strong>.'
+							: '';
+						resolve('&#10003; Your order has been confirmed!' + eta, '#f0faf0', '#4caf50', '#1b5e20');
 					} else if (data.status === 'CANCELLED') {
 						var isCod = data.payment_method === 'cod';
-						var declineMsg;
+						var msg;
 						if (isCod) {
-							declineMsg = 'Unfortunately your order was declined by the restaurant.';
+							msg = 'Unfortunately your order was declined by the restaurant.';
 						} else {
-							var amount = data.total_amount ? ' of &pound;' + parseFloat(data.total_amount).toFixed(2) : '';
-							declineMsg = 'Unfortunately your order was declined. A refund' + amount + ' has been initiated and will appear within 3&ndash;5 business days.';
+							var amount = data.total_amount
+								? ' of &pound;' + parseFloat(data.total_amount).toFixed(2)
+								: '';
+							msg = 'Unfortunately your order was declined. A refund' + amount + ' has been initiated and will appear within 3&ndash;5 business days.';
 						}
-						text.innerHTML = declineMsg;
-						applyStyle('#fff5f5', '#e53935', '#7f0000');
-						clearInterval(timer);
+						resolve(msg, '#fff5f5', '#e53935', '#7f0000');
 					}
 				})
 				.catch(function () { /* network blip — keep polling */ });
