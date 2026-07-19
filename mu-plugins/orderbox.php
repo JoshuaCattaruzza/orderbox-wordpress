@@ -14,15 +14,36 @@ if ( isset( $_SERVER['HTTP_HOST'] ) && $_SERVER['HTTP_HOST'] === 'wp_app' ) {
 	$_SERVER['HTTPS'] = 'on';
 }
 
-// Deliver WooCommerce webhooks synchronously so orders reach the OrderBox API
-// immediately on checkout, not on the next page load via Action Scheduler.
-add_filter( 'woocommerce_webhook_deliver_async', '__return_false' );
+// Deliver webhooks synchronously so orders reach the OrderBox API immediately
+// on checkout — except when the checkout itself is a REST API request
+// (WooCommerce Blocks / Store API: Stripe, Apple Pay, Google Pay). WooCommerce
+// builds the webhook payload via its own nested rest_do_request() call, which
+// lazy-loads the /wc/v3/ namespace through a rest_pre_dispatch hook; firing
+// that nested call while already inside the Store API's own REST dispatch
+// breaks the lazy-load handshake and 404s with rest_no_route, so the webhook
+// body ends up containing that error instead of the order data (confirmed via
+// a live checkout test). Classic/COD checkout never runs inside a REST
+// dispatch, so it keeps the original instant-delivery behavior; Blocks/Store
+// API checkouts fall back to async, which self-triggers within the same
+// request via a loopback HTTP call and is near-instant in practice.
+add_filter( 'woocommerce_webhook_deliver_async', function ( $async ) {
+	if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+		return true; // let Blocks/Store API checkouts queue async instead of crashing
+	}
+	return false; // synchronous everywhere else, matching the original intent
+} );
 
 // ── Pause / resume ────────────────────────────────────────────────────────────
 // Config is read from environment variables, with wp-config.php constants as
 // an override and sensible local-dev defaults as the final fallback.
 if ( ! defined( 'ORDERBOX_API_URL' ) )   define( 'ORDERBOX_API_URL',   getenv( 'ORDERBOX_API_URL' )   ?: 'http://orderbox_api:3000' );
 if ( ! defined( 'ORDERBOX_SUBDOMAIN' ) ) define( 'ORDERBOX_SUBDOMAIN', getenv( 'ORDERBOX_SUBDOMAIN' ) ?: 'demo' );
+
+// ORDERBOX_API_URL above is used for server-side calls and, in production, is
+// already a public URL the browser can reach too. In local dev it's a
+// Docker-internal hostname the browser can't resolve, so client-side fetches
+// (the order-tracking banner below) need a separately reachable URL.
+if ( ! defined( 'ORDERBOX_PUBLIC_API_URL' ) ) define( 'ORDERBOX_PUBLIC_API_URL', getenv( 'ORDERBOX_PUBLIC_API_URL' ) ?: ORDERBOX_API_URL );
 
 /**
  * Returns true if the restaurant is currently paused.
@@ -131,6 +152,63 @@ add_action( 'woocommerce_thankyou', function () {
 	unset( $_COOKIE['orderbox_order_type'] );
 } );
 
+// ── Express checkout (Apple/Google Pay) delivery-date defaults ────────────────
+// WooCommerce Blocks Store API checkout (used by the Stripe Payment Request
+// Button for Apple/Google Pay) never touches the visible checkout form, so the
+// "Order Delivery Date for WooCommerce (Lite)" plugin's required fields arrive
+// empty and fail validation with "Delivery Date is a required field." Detect
+// express checkout via the `express_payment_type` key WooCommerce Blocks adds
+// to payment_data, and inject defaults into extensions['order-delivery-date']
+// before orddd_lite's validation callback runs.
+add_filter( 'rest_request_before_callbacks', function ( $response, $handler, $request ) {
+	if ( strpos( $request->get_route(), 'wc/store/v1/checkout' ) === false ) {
+		return $response;
+	}
+
+	$is_express = false;
+	foreach ( (array) $request->get_param( 'payment_data' ) as $item ) {
+		if ( ( $item['key'] ?? '' ) === 'express_payment_type' && ! empty( $item['value'] ) ) {
+			$is_express = true;
+			break;
+		}
+	}
+	if ( ! $is_express ) {
+		return $response;
+	}
+
+	$extensions = $request->get_param( 'extensions' );
+	if ( ! is_array( $extensions ) ) {
+		$extensions = [];
+	}
+	if ( ! isset( $extensions['order-delivery-date'] ) || ! is_array( $extensions['order-delivery-date'] ) ) {
+		$extensions['order-delivery-date'] = [];
+	}
+
+	// e_deliverydate and h_deliverydate aren't duplicates of the same value —
+	// on a real checkout, block.js binds the visible jQuery UI datepicker to
+	// #e_deliverydate (display format, e.g. "19 July, 2026", matching the site's
+	// orddd_lite_delivery_date_format option) while #h_deliverydate is a hidden
+	// field always in the fixed 'dd-mm-y' shape that
+	// Orddd_Lite_Common::orddd_lite_get_timestamp() parses via mktime(). Sending
+	// the display format for h_deliverydate throws a TypeError there (confirmed
+	// via a live checkout crash); sending the numeric format for e_deliverydate
+	// works but shows wrong everywhere it's displayed verbatim (e.g. the Pi's
+	// receipt printer, which prints the "Delivery Date" order meta as-is).
+	if ( empty( $extensions['order-delivery-date']['e_deliverydate'] ) ) {
+		$extensions['order-delivery-date']['e_deliverydate'] = date( 'j F, Y' );
+	}
+	if ( empty( $extensions['order-delivery-date']['h_deliverydate'] ) ) {
+		$extensions['order-delivery-date']['h_deliverydate'] = date( 'd-m-Y' );
+	}
+	if ( empty( $extensions['order-delivery-date']['orddd_lite_time_slot'] ) ) {
+		$extensions['order-delivery-date']['orddd_lite_time_slot'] = 'asap';
+	}
+
+	$request->set_param( 'extensions', $extensions );
+
+	return $response;
+}, 5, 3 );
+
 // ── Order tracking banner ──────────────────────────────────────────────────────
 /**
  * Full-page pending overlay while the restaurant hasn't responded yet.
@@ -140,7 +218,7 @@ add_action( 'woocommerce_thankyou', function () {
 add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
 	$order     = wc_get_order( $order_id );
 	$order_key = $order ? $order->get_order_key() : '';
-	$api_url   = rtrim( ORDERBOX_API_URL, '/' );
+	$api_url   = rtrim( ORDERBOX_PUBLIC_API_URL, '/' );
 	$subdomain = ORDERBOX_SUBDOMAIN;
 
 	?>
