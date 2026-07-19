@@ -1,5 +1,17 @@
 <?php
 /**
+ * WordPress's default pseudo-cron only runs when a page load happens to
+ * trigger it, and Action Scheduler's own instant self-dispatch (a separate,
+ * non-blocking fire-and-forget request) isn't firing reliably in this
+ * environment — confirmed via Action Scheduler's own logs showing webhook
+ * deliveries completing "via WP Cron" up to ~90s after being scheduled,
+ * instead of near-instantly. A real system cron (crontab entry hitting
+ * wp-cron.php on an interval) replaces it with a predictable upper bound on
+ * delay instead of "whenever someone happens to load a page."
+ */
+if ( ! defined( 'DISABLE_WP_CRON' ) ) define( 'DISABLE_WP_CRON', true );
+
+/**
  * Allows WordPress HTTP requests to reach internal Docker services.
  * Required for WooCommerce webhook delivery to the OrderBox API on the local network.
  */
