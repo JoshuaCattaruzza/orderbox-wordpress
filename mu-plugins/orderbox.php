@@ -312,6 +312,21 @@ add_action( 'woocommerce_before_thankyou', function ( int $order_id ) {
 			result.innerHTML = html;
 		}
 
+		// The overlay must never trap the customer on their own confirmation
+		// page: if the API is unreachable or the restaurant is slow to respond,
+		// drop the blocking overlay after 90s and show a soft "order received"
+		// banner instead. Polling continues in the background, so a later
+		// accept/decline still updates the banner via resolve().
+		setTimeout(function () {
+			if (resolved) return;
+			overlay.style.display = 'none';
+			result.style.display  = 'block';
+			result.style.background  = '#f5f9ff';
+			result.style.borderColor = '#1a73e8';
+			result.style.color       = '#0d47a1';
+			result.innerHTML = 'Your order has been received. The restaurant will confirm it shortly &mdash; updates will appear here. If you need to make changes, please call the restaurant.';
+		}, 90000);
+
 		function poll() {
 			fetch(url)
 				.then(function (r) { return r.ok ? r.json() : null; })
