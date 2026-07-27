@@ -326,6 +326,30 @@ add_filter( 'woocommerce_package_rates', function ( $rates ) {
 	return $rates;
 }, 20 );
 
+// Apple/Google Pay pick their own shipping option inside the payment sheet and
+// ignore whatever was pre-selected on the site — confirmed live: express orders
+// placed as Delivery arrived as local_pickup with £0 shipping, so the customer
+// was undercharged and the kitchen was told to expect a collection. The
+// customer has no way to correct that from inside the sheet either.
+//
+// So during Store API requests (which is how express checkout runs, and only
+// express checkout here — the site uses the classic checkout) offer only the
+// order type the customer actually chose. There is then no wrong option to
+// pick. Deliberately scoped to REST so the normal checkout keeps both choices
+// visible and switchable.
+add_filter( 'woocommerce_package_rates', function ( $rates ) {
+	$type = $_COOKIE['orderbox_order_type'] ?? '';
+	if ( '' === $type || ! ( defined( 'REST_REQUEST' ) && REST_REQUEST ) ) return $rates;
+
+	$keep = [];
+	foreach ( $rates as $id => $rate ) {
+		$is_pickup = strpos( $rate->get_method_id(), 'local_pickup' ) !== false;
+		if ( $is_pickup === ( 'collection' === $type ) ) $keep[ $id ] = $rate;
+	}
+	// Never strip every option — an empty rate list breaks checkout outright.
+	return $keep ? $keep : $rates;
+}, 30 );
+
 // Without this the stand-in renders as "Delivery: Free!", which is a promise we
 // are not making. Show what it actually is: a price we can't work out yet.
 add_filter( 'woocommerce_cart_shipping_method_full_label', function ( $label, $method ) {
