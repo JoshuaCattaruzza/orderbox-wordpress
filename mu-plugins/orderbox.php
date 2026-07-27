@@ -312,9 +312,20 @@ add_filter( 'woocommerce_checkout_fields', function ( $fields ) {
 	return $fields;
 } );
 
-// Client side: show/hide the same fields live as the customer switches
+// Client side: show/hide the address fields live as the customer switches
 // between Delivery and Collection (the billing form is NOT one of the
-// fragments WooCommerce re-renders on update_checkout, so this needs JS).
+// fragments WooCommerce re-renders on update_checkout, so this needs JS), and
+// relabel the orddd_lite date field to "Collection Date" to match.
+//
+// The relabel is deliberately visual-only. It must NEVER be done by changing
+// the plugin's `orddd_lite_delivery_date_field_label` option, because orddd
+// uses that option string verbatim as the ORDER META KEY when it saves the
+// date — on both the classic path (class-orddd-lite-process.php) and the
+// Store API path (class-orddd-lite-delivery-blocks.php). The Pi receipt
+// printer and the API's delivery-time extraction both look the value up by
+// the literal key "Delivery Date", so renaming the option would silently drop
+// the date from every receipt. The field also can't simply be hidden: it's
+// mandatory, so checkout would fail validation.
 add_action( 'wp_footer', function () {
 	if ( ! function_exists( 'is_checkout' ) || ! is_checkout() || is_order_received_page() ) return;
 	$selectors = '#' . implode( '_field, #', ORDERBOX_COLLECTION_HIDDEN_FIELDS ) . '_field';
@@ -322,15 +333,40 @@ add_action( 'wp_footer', function () {
 	<script>
 	jQuery( function ( $ ) {
 		var addressFields = <?php echo wp_json_encode( $selectors ); ?>;
-		function orderboxToggleAddressFields() {
+		var origDateLabel = null;
+
+		// The label is "Delivery Date" followed by &nbsp; and, since the field
+		// is mandatory, a <abbr class="required">*</abbr>. Swap only the text
+		// node so the asterisk survives.
+		function dateLabelTextNode() {
+			var el = document.querySelector( '#e_deliverydate_field label' );
+			if ( ! el ) return null;
+			for ( var i = 0; i < el.childNodes.length; i++ ) {
+				var n = el.childNodes[ i ];
+				if ( n.nodeType === 3 && n.nodeValue.trim() !== '' ) return n;
+			}
+			return null;
+		}
+
+		function orderboxApplyOrderType() {
 			var method = $( 'input[name^="shipping_method"]:checked' ).val()
 				|| $( 'input[name^="shipping_method"]' ).val() || '';
 			var collection = method.indexOf( 'local_pickup' ) !== -1;
+
 			$( addressFields ).toggle( ! collection );
+
+			var node = dateLabelTextNode();
+			if ( node ) {
+				if ( origDateLabel === null ) origDateLabel = node.nodeValue;
+				node.nodeValue = collection
+					? 'Collection Date' + origDateLabel.match( /\s*$/ )[ 0 ]
+					: origDateLabel;
+			}
 		}
-		$( document.body ).on( 'updated_checkout', orderboxToggleAddressFields );
-		$( document ).on( 'change', 'input[name^="shipping_method"]', orderboxToggleAddressFields );
-		orderboxToggleAddressFields();
+
+		$( document.body ).on( 'updated_checkout', orderboxApplyOrderType );
+		$( document ).on( 'change', 'input[name^="shipping_method"]', orderboxApplyOrderType );
+		orderboxApplyOrderType();
 	} );
 	</script>
 	<?php
