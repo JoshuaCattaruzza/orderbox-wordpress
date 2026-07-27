@@ -227,13 +227,18 @@ function orderbox_delivery_minimum_message( bool $html = true ): string {
 	return $html ? $msg : html_entity_decode( wp_strip_all_tags( $msg ), ENT_QUOTES );
 }
 
-// Inline warning in the checkout payment area — sits inside the fragment
-// WooCommerce re-renders on update_checkout, so it tracks delivery/collection
-// switches live.
-add_action( 'woocommerce_review_order_before_payment', function () {
+// Inline warning directly under the Delivery/Collection choice, rendered
+// inside the order-review table — one of the fragments WooCommerce replaces
+// on every update_checkout, so it appears/disappears live as the customer
+// switches method. (Do NOT use woocommerce_review_order_before_payment for
+// this: payment.php only fires that hook on the initial page render and
+// skips it in ajax context, so a warning rendered at page load would sit
+// there stale after the customer switched to Collection.)
+add_action( 'woocommerce_review_order_after_shipping', function () {
 	if ( ! orderbox_delivery_below_minimum() ) return;
-	echo '<div class="woocommerce-error" role="alert" style="margin-bottom:15px;">'
-		. orderbox_delivery_minimum_message() . '</div>';
+	echo '<tr class="orderbox-delivery-minimum"><td colspan="2">'
+		. '<div class="woocommerce-error" role="alert" style="margin:0;">'
+		. orderbox_delivery_minimum_message() . '</div></td></tr>';
 } );
 
 // Replace the Place order button while below the minimum.
