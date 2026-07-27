@@ -388,24 +388,14 @@ add_action( 'woocommerce_review_order_after_shipping', function () {
 
 // The billing_* field wrappers hidden for collection. Kept in one place so
 // the PHP filter and the JS toggle below can never disagree.
-// NOTE: billing_city and billing_postcode are deliberately NOT hidden. This
-// store's delivery rate (`city_zip_based_shipping_method`) decides whether it
-// can deliver from the city/postcode, so with those fields hidden a customer
-// with no address on file has no delivery rate offered — leaving Collection as
-// the only option, with no way to enter the postcode that would bring Delivery
-// back. That deadlocked checkout into Collection. They stay visible and remain
-// optional for collection orders.
+// Every address field, hidden and made optional together for collection —
+// a collection customer should not be asked for an address at all.
+//
+// This can safely include the town and postcode now that a Delivery option is
+// always offered: the customer can always click Delivery to bring these fields
+// back. When Delivery only appeared once a town was known, hiding them here
+// left no way to enter one, which trapped customers on Collection.
 const ORDERBOX_COLLECTION_HIDDEN_FIELDS = [
-	'billing_company',
-	'billing_country',
-	'billing_address_1',
-	'billing_address_2',
-	'billing_state',
-];
-
-// Made optional for collection (a superset of the hidden ones — city and
-// postcode stay on screen but must not block a collection checkout).
-const ORDERBOX_COLLECTION_OPTIONAL_FIELDS = [
 	'billing_company',
 	'billing_country',
 	'billing_address_1',
@@ -422,7 +412,7 @@ const ORDERBOX_COLLECTION_OPTIONAL_FIELDS = [
 // stale requirement in either direction.
 add_filter( 'woocommerce_checkout_fields', function ( $fields ) {
 	if ( ! orderbox_is_collection() ) return $fields;
-	foreach ( ORDERBOX_COLLECTION_OPTIONAL_FIELDS as $key ) {
+	foreach ( ORDERBOX_COLLECTION_HIDDEN_FIELDS as $key ) {
 		if ( isset( $fields['billing'][ $key ] ) ) {
 			$fields['billing'][ $key ]['required'] = false;
 		}
