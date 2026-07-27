@@ -292,42 +292,92 @@ add_action( 'woocommerce_store_api_cart_errors', function ( $errors ) {
 	}
 }, 10, 1 );
 
-// ── "We don't deliver there" notice ───────────────────────────────────────────
-// The delivery rate is configured to hide itself when the town isn't one we
-// cover (city_zip_no_match = hide_shipping_rate), which is the right business
-// rule — it stops out-of-area orders. But it's silent: a customer in an
-// uncovered town fills in their address and simply watches the Delivery option
-// vanish, with no explanation, and assumes the site is broken. Say so instead.
+// ── Delivery is always offered ────────────────────────────────────────────────
+// The delivery rate (city_zip_based_shipping_method) only appears once the
+// customer has typed a town we cover — it matches on CITY, not postcode. That
+// meant Delivery simply did not exist as a choice for anyone who hadn't given
+// an address yet, so a customer who picked Collection could never switch to it:
+// no Delivery option to click, and the address fields hidden, so no way to
+// enter the town that would create one.
 //
-// Only fires once a town has actually been entered; before that there is
-// legitimately nothing to say.
-function orderbox_delivery_unavailable_for(): string {
-	if ( ! function_exists( 'WC' ) || ! WC()->cart || ! WC()->cart->needs_shipping() ) return '';
-	if ( ( $_COOKIE['orderbox_order_type'] ?? '' ) !== 'delivery' ) return '';
-	if ( ! WC()->customer ) return '';
+// Both options must always be selectable. When the plugin isn't offering a real
+// delivery rate we add a stand-in, so the customer can always choose Delivery,
+// reveal the address fields, and type their town. The moment the town matches,
+// the plugin's real rate appears and this stand-in disappears. Checking out on
+// the stand-in is blocked below — it means we don't deliver there (or the town
+// is still blank), so it must never become a real order.
+const ORDERBOX_PENDING_DELIVERY = 'orderbox_delivery_pending';
 
-	$city = trim( WC()->customer->get_shipping_city() ?: WC()->customer->get_billing_city() );
-	if ( '' === $city ) return '';
-
-	foreach ( WC()->shipping()->get_packages() as $package ) {
-		foreach ( (array) ( $package['rates'] ?? [] ) as $rate ) {
-			if ( strpos( $rate->get_method_id(), 'local_pickup' ) === false ) {
-				return ''; // a real delivery rate is on offer — nothing to warn about
-			}
+function orderbox_has_real_delivery_rate( array $rates ): bool {
+	foreach ( $rates as $rate ) {
+		$id = $rate->get_method_id();
+		if ( ORDERBOX_PENDING_DELIVERY !== $id && strpos( $id, 'local_pickup' ) === false ) {
+			return true;
 		}
 	}
-	return $city;
+	return false;
 }
 
+add_filter( 'woocommerce_package_rates', function ( $rates ) {
+	if ( orderbox_has_real_delivery_rate( (array) $rates ) ) return $rates;
+	$rates[ ORDERBOX_PENDING_DELIVERY ] = new WC_Shipping_Rate(
+		ORDERBOX_PENDING_DELIVERY, 'Delivery', 0, [], ORDERBOX_PENDING_DELIVERY
+	);
+	return $rates;
+}, 20 );
+
+// Without this the stand-in renders as "Delivery: Free!", which is a promise we
+// are not making. Show what it actually is: a price we can't work out yet.
+add_filter( 'woocommerce_cart_shipping_method_full_label', function ( $label, $method ) {
+	if ( ORDERBOX_PENDING_DELIVERY === $method->get_method_id() ) {
+		return 'Delivery <small>(enter your town below for the price)</small>';
+	}
+	return $label;
+}, 10, 2 );
+
+/**
+ * The customer has Delivery selected but we have no real rate for them —
+ * either the town is still blank, or it's outside the delivery area.
+ * Returns the reason to show them, or '' when there is nothing wrong.
+ */
+function orderbox_pending_delivery_problem(): string {
+	if ( ! function_exists( 'WC' ) || ! WC()->cart || ! WC()->cart->needs_shipping() ) return '';
+
+	$chosen = WC()->session ? (array) WC()->session->get( 'chosen_shipping_methods' ) : [];
+	if ( ! in_array( ORDERBOX_PENDING_DELIVERY, $chosen, true ) ) return '';
+
+	$city = WC()->customer
+		? trim( WC()->customer->get_shipping_city() ?: WC()->customer->get_billing_city() )
+		: '';
+
+	return '' === $city
+		? 'Please enter your town so we can check whether we deliver to you — or choose Collection.'
+		: sprintf( "Sorry, we don't deliver to %s. Please choose Collection, or change the address.", $city );
+}
+
+// Block the classic checkout.
+add_action( 'woocommerce_checkout_process', function () {
+	$problem = orderbox_pending_delivery_problem();
+	if ( '' !== $problem ) wc_add_notice( $problem, 'error' );
+} );
+
+// Block Apple/Google Pay too — express checkout never runs the hook above, so
+// without this an out-of-area delivery could be paid for with no shipping cost.
+add_action( 'woocommerce_store_api_cart_errors', function ( $errors ) {
+	$problem = orderbox_pending_delivery_problem();
+	if ( '' !== $problem ) $errors->add( 'orderbox_delivery_area', $problem );
+}, 10, 1 );
+
+// Tell the customer, inline in the order summary, why Delivery isn't costed
+// yet — either their town is blank or we don't cover it. Rendered inside the
+// review table because that is one of the fragments WooCommerce re-renders on
+// every checkout update, so it tracks what they type live.
 add_action( 'woocommerce_review_order_after_shipping', function () {
-	$city = orderbox_delivery_unavailable_for();
-	if ( '' === $city ) return;
+	$problem = orderbox_pending_delivery_problem();
+	if ( '' === $problem ) return;
 	echo '<tr class="orderbox-no-delivery"><td colspan="2">'
 		. '<div class="woocommerce-info" role="status" style="margin:0;">'
-		. sprintf(
-			'Sorry, we don\'t deliver to %s. You can still choose <strong>Collection</strong> above, or change the address.',
-			esc_html( $city )
-		)
+		. esc_html( $problem )
 		. '</div></td></tr>';
 } );
 
@@ -437,8 +487,18 @@ add_action( 'wp_footer', function () {
 			return m ? decodeURIComponent( m[1] ) : orderboxType;
 		}
 
+		// Read the selected shipping option. Safe now that a Delivery option is
+		// always present: previously, before a town was entered the only option
+		// was Collection, so this read "collection" for everyone and hid the
+		// address fields — removing the only way to enter the town. With
+		// Delivery always selectable that loop is gone, and the option the
+		// customer can actually see is the honest source of truth. Falls back to
+		// the order-type cookie only before the options have rendered.
 		function orderboxApplyOrderType() {
-			var collection = orderboxOrderType() === 'collection';
+			var $checked = $( 'input[name^="shipping_method"]:checked' );
+			var collection = $checked.length
+				? String( $checked.val() || '' ).indexOf( 'local_pickup' ) !== -1
+				: orderboxOrderType() === 'collection';
 
 			$( addressFields ).toggle( ! collection );
 
