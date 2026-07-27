@@ -123,6 +123,14 @@ add_filter( 'woocommerce_add_to_cart_validation', function ( bool $passed ): boo
 	return $passed;
 }, 10, 1 );
 
+// Keep completed/cancelled/failed Action Scheduler rows for 7 days instead of
+// the default 31 — with async webhook delivery every order generates several
+// actions (each with ~3 log rows), and a month of retention bloated the DB to
+// the point of slowing every AS query and tripling the nightly dumps.
+add_filter( 'action_scheduler_retention_period', function () {
+	return 7 * DAY_IN_SECONDS;
+} );
+
 // ── Order type pre-selection ──────────────────────────────────────────────────
 // The order-type page links to /menu?order_type=delivery|collection.
 // We persist that choice in a cookie and use it to pre-select the right
