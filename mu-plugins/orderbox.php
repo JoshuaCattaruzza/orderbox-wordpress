@@ -287,6 +287,45 @@ add_action( 'woocommerce_store_api_cart_errors', function ( $errors ) {
 	}
 }, 10, 1 );
 
+// ── "We don't deliver there" notice ───────────────────────────────────────────
+// The delivery rate is configured to hide itself when the town isn't one we
+// cover (city_zip_no_match = hide_shipping_rate), which is the right business
+// rule — it stops out-of-area orders. But it's silent: a customer in an
+// uncovered town fills in their address and simply watches the Delivery option
+// vanish, with no explanation, and assumes the site is broken. Say so instead.
+//
+// Only fires once a town has actually been entered; before that there is
+// legitimately nothing to say.
+function orderbox_delivery_unavailable_for(): string {
+	if ( ! function_exists( 'WC' ) || ! WC()->cart || ! WC()->cart->needs_shipping() ) return '';
+	if ( ( $_COOKIE['orderbox_order_type'] ?? '' ) !== 'delivery' ) return '';
+	if ( ! WC()->customer ) return '';
+
+	$city = trim( WC()->customer->get_shipping_city() ?: WC()->customer->get_billing_city() );
+	if ( '' === $city ) return '';
+
+	foreach ( WC()->shipping()->get_packages() as $package ) {
+		foreach ( (array) ( $package['rates'] ?? [] ) as $rate ) {
+			if ( strpos( $rate->get_method_id(), 'local_pickup' ) === false ) {
+				return ''; // a real delivery rate is on offer — nothing to warn about
+			}
+		}
+	}
+	return $city;
+}
+
+add_action( 'woocommerce_review_order_after_shipping', function () {
+	$city = orderbox_delivery_unavailable_for();
+	if ( '' === $city ) return;
+	echo '<tr class="orderbox-no-delivery"><td colspan="2">'
+		. '<div class="woocommerce-info" role="status" style="margin:0;">'
+		. sprintf(
+			'Sorry, we don\'t deliver to %s. You can still choose <strong>Collection</strong> above, or change the address.',
+			esc_html( $city )
+		)
+		. '</div></td></tr>';
+} );
+
 // ── Collection checkout: name + contact only ──────────────────────────────────
 // A collection order needs no address, so the billing address fields are
 // hidden and made optional — only name, phone and email remain. (WooCommerce
@@ -372,10 +411,21 @@ add_action( 'wp_footer', function () {
 			return null;
 		}
 
+		// What the customer picked on the order-type page. This does NOT depend
+		// on their address, which is the whole point: reading the *selected
+		// shipping rate* instead was the original bug. The city-based delivery
+		// rate only appears once a town is known, so before that the only rate
+		// on offer is local_pickup — we read that as "collection", hid the
+		// address fields, and removed the only way to enter the town that would
+		// have made Delivery appear. A closed loop that trapped customers on
+		// Collection.
+		function orderboxOrderType() {
+			var m = document.cookie.match( /(?:^|;\s*)orderbox_order_type=([^;]*)/ );
+			return m ? decodeURIComponent( m[1] ) : '';
+		}
+
 		function orderboxApplyOrderType() {
-			var method = $( 'input[name^="shipping_method"]:checked' ).val()
-				|| $( 'input[name^="shipping_method"]' ).val() || '';
-			var collection = method.indexOf( 'local_pickup' ) !== -1;
+			var collection = orderboxOrderType() === 'collection';
 
 			$( addressFields ).toggle( ! collection );
 
@@ -388,8 +438,17 @@ add_action( 'wp_footer', function () {
 			}
 		}
 
+		// Changing the shipping option by hand is a genuine change of mind —
+		// record it so it survives the next refresh and stays in step with the
+		// order-type page.
+		$( document ).on( 'change', 'input[name^="shipping_method"]', function () {
+			var val = String( $( this ).val() || '' );
+			var type = val.indexOf( 'local_pickup' ) !== -1 ? 'collection' : 'delivery';
+			document.cookie = 'orderbox_order_type=' + type + ';path=/;max-age=86400;samesite=lax';
+			orderboxApplyOrderType();
+		} );
+
 		$( document.body ).on( 'updated_checkout', orderboxApplyOrderType );
-		$( document ).on( 'change', 'input[name^="shipping_method"]', orderboxApplyOrderType );
 		orderboxApplyOrderType();
 	} );
 	</script>
