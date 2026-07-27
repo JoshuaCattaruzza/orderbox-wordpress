@@ -330,7 +330,7 @@ add_filter( 'woocommerce_package_rates', function ( $rates ) {
 // are not making. Show what it actually is: a price we can't work out yet.
 add_filter( 'woocommerce_cart_shipping_method_full_label', function ( $label, $method ) {
 	if ( ORDERBOX_PENDING_DELIVERY === $method->get_method_id() ) {
-		return 'Delivery <small>(enter your town below for the price)</small>';
+		return 'Delivery <small>(enter your town to see the price)</small>';
 	}
 	return $label;
 }, 10, 2 );
