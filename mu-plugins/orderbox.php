@@ -186,19 +186,33 @@ function orderbox_food_total(): float {
 }
 
 /**
+ * True when the customer's order is collection (local_pickup). The chosen
+ * shipping method in the session is authoritative; before one exists (first
+ * checkout render) the order-type cookie is used. Anything unknown returns
+ * false — callers treat that as delivery, the conservative default for both
+ * the minimum (enforce it) and the trimmed checkout form (show all fields).
+ */
+function orderbox_is_collection(): bool {
+	if ( ! function_exists( 'WC' ) ) return false;
+	$chosen = WC()->session ? (array) WC()->session->get( 'chosen_shipping_methods' ) : [];
+	$method = (string) ( $chosen[0] ?? '' );
+	if ( $method !== '' ) {
+		return strpos( $method, 'local_pickup' ) !== false;
+	}
+	return ( $_COOKIE['orderbox_order_type'] ?? '' ) === 'collection';
+}
+
+/**
  * True when the cart is a delivery order below the tenant's minimum.
- * An unknown/empty shipping choice counts as delivery — fail closed: the
- * customer can always switch to collection, but a session hiccup must not
- * waive the minimum.
+ * Collection is exempt; an unknown state counts as delivery — fail closed:
+ * the customer can always switch to collection, but a session hiccup must
+ * not waive the minimum.
  */
 function orderbox_delivery_below_minimum(): bool {
 	if ( ORDERBOX_DELIVERY_MINIMUM <= 0 ) return false;
 	if ( ! function_exists( 'WC' ) || ! WC()->cart || WC()->cart->is_empty() ) return false;
 	if ( ! WC()->cart->needs_shipping() ) return false;
-
-	$chosen = WC()->session ? (array) WC()->session->get( 'chosen_shipping_methods' ) : [];
-	$method = (string) ( $chosen[0] ?? '' );
-	if ( $method !== '' && strpos( $method, 'local_pickup' ) !== false ) return false;
+	if ( orderbox_is_collection() ) return false;
 
 	return orderbox_food_total() < ORDERBOX_DELIVERY_MINIMUM;
 }
@@ -247,6 +261,62 @@ add_action( 'woocommerce_store_api_cart_errors', function ( $errors ) {
 		$errors->add( 'orderbox_delivery_minimum', orderbox_delivery_minimum_message( false ) );
 	}
 }, 10, 1 );
+
+// ── Collection checkout: name + contact only ──────────────────────────────────
+// A collection order needs no address, so the billing address fields are
+// hidden and made optional — only name, phone and email remain. (WooCommerce
+// already suppresses the separate shipping-address form for local_pickup.)
+
+// The billing_* field wrappers hidden for collection. Kept in one place so
+// the PHP filter and the JS toggle below can never disagree.
+const ORDERBOX_COLLECTION_HIDDEN_FIELDS = [
+	'billing_company',
+	'billing_country',
+	'billing_address_1',
+	'billing_address_2',
+	'billing_city',
+	'billing_state',
+	'billing_postcode',
+];
+
+// Server side: drop the required flag when the order is collection. This
+// filter runs again during process_checkout with the customer's final
+// shipping choice in the session, so validation is always computed against
+// what they actually picked — switching methods mid-checkout can't produce a
+// stale requirement in either direction.
+add_filter( 'woocommerce_checkout_fields', function ( $fields ) {
+	if ( ! orderbox_is_collection() ) return $fields;
+	foreach ( ORDERBOX_COLLECTION_HIDDEN_FIELDS as $key ) {
+		if ( isset( $fields['billing'][ $key ] ) ) {
+			$fields['billing'][ $key ]['required'] = false;
+		}
+	}
+	return $fields;
+} );
+
+// Client side: show/hide the same fields live as the customer switches
+// between Delivery and Collection (the billing form is NOT one of the
+// fragments WooCommerce re-renders on update_checkout, so this needs JS).
+add_action( 'wp_footer', function () {
+	if ( ! function_exists( 'is_checkout' ) || ! is_checkout() || is_order_received_page() ) return;
+	$selectors = '#' . implode( '_field, #', ORDERBOX_COLLECTION_HIDDEN_FIELDS ) . '_field';
+	?>
+	<script>
+	jQuery( function ( $ ) {
+		var addressFields = <?php echo wp_json_encode( $selectors ); ?>;
+		function orderboxToggleAddressFields() {
+			var method = $( 'input[name^="shipping_method"]:checked' ).val()
+				|| $( 'input[name^="shipping_method"]' ).val() || '';
+			var collection = method.indexOf( 'local_pickup' ) !== -1;
+			$( addressFields ).toggle( ! collection );
+		}
+		$( document.body ).on( 'updated_checkout', orderboxToggleAddressFields );
+		$( document ).on( 'change', 'input[name^="shipping_method"]', orderboxToggleAddressFields );
+		orderboxToggleAddressFields();
+	} );
+	</script>
+	<?php
+} );
 
 // ── Express checkout (Apple/Google Pay) delivery-date defaults ────────────────
 // WooCommerce Blocks Store API checkout (used by the Stripe Payment Request
