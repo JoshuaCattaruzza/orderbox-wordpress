@@ -337,9 +337,26 @@ add_filter( 'woocommerce_package_rates', function ( $rates ) {
 // order type the customer actually chose. There is then no wrong option to
 // pick. Deliberately scoped to REST so the normal checkout keeps both choices
 // visible and switchable.
+/**
+ * True while an Apple/Google Pay express request is being served.
+ *
+ * The express flow runs over Stripe's own `wc-ajax=wc_stripe_*` endpoints
+ * (get_shipping_options, update_shipping_method, create_order — see
+ * class-wc-stripe-express-checkout-ajax-handler.php), NOT the Store API. An
+ * earlier version of this guard tested REST_REQUEST only, so it never fired
+ * during express checkout at all and delivery orders kept arriving as
+ * collection. REST is kept as well because the final checkout call can go
+ * through the Store API depending on the Stripe checkout experience in use.
+ */
+function orderbox_is_express_request(): bool {
+	$ajax = isset( $_GET['wc-ajax'] ) ? (string) $_GET['wc-ajax'] : '';
+	if ( 0 === strpos( $ajax, 'wc_stripe_' ) ) return true;
+	return defined( 'REST_REQUEST' ) && REST_REQUEST;
+}
+
 add_filter( 'woocommerce_package_rates', function ( $rates ) {
 	$type = $_COOKIE['orderbox_order_type'] ?? '';
-	if ( '' === $type || ! ( defined( 'REST_REQUEST' ) && REST_REQUEST ) ) return $rates;
+	if ( '' === $type || ! orderbox_is_express_request() ) return $rates;
 
 	$keep = [];
 	foreach ( $rates as $id => $rate ) {
@@ -349,6 +366,22 @@ add_filter( 'woocommerce_package_rates', function ( $rates ) {
 	// Never strip every option — an empty rate list breaks checkout outright.
 	return $keep ? $keep : $rates;
 }, 30 );
+
+// Belt and braces for the same problem. Stripe writes its own choice into the
+// session as the customer moves around the payment sheet, and that choice was
+// observed flipping back to collection after briefly showing the delivery
+// charge. With only one rate on offer (above) there is nothing to flip to, but
+// pin the chosen method anyway so a mismatch can't survive into the order.
+add_filter( 'woocommerce_shipping_chosen_method', function ( $default, $rates ) {
+	$type = $_COOKIE['orderbox_order_type'] ?? '';
+	if ( '' === $type || ! orderbox_is_express_request() ) return $default;
+
+	foreach ( $rates as $rate_id => $rate ) {
+		$is_pickup = strpos( $rate->get_method_id(), 'local_pickup' ) !== false;
+		if ( $is_pickup === ( 'collection' === $type ) ) return $rate_id;
+	}
+	return $default;
+}, 20, 2 );
 
 // Without this the stand-in renders as "Delivery: Free!", which is a promise we
 // are not making. Show what it actually is: a price we can't work out yet.
