@@ -164,6 +164,90 @@ add_action( 'woocommerce_thankyou', function () {
 	unset( $_COOKIE['orderbox_order_type'] );
 } );
 
+// ── Checkout shipping label ───────────────────────────────────────────────────
+// The checkout's shipping section is titled "Shipping" by default — rename it,
+// since the choice it presents is Delivery vs Collection.
+add_filter( 'woocommerce_shipping_package_name', function () {
+	return 'Delivery Options';
+}, 20 );
+
+// ── Delivery minimum order ────────────────────────────────────────────────────
+// Per-tenant minimum food total for delivery orders (collection is exempt),
+// set via ORDERBOX_DELIVERY_MINIMUM in the tenant's .env. 0/unset disables.
+if ( ! defined( 'ORDERBOX_DELIVERY_MINIMUM' ) ) define( 'ORDERBOX_DELIVERY_MINIMUM', (float) ( getenv( 'ORDERBOX_DELIVERY_MINIMUM' ) ?: 0 ) );
+
+/**
+ * Post-discount, tax-inclusive food total — what the customer actually pays
+ * for the food itself, excluding delivery fees. (The displayed pre-discount
+ * subtotal would let a couponed £15 basket pass a £20 minimum.)
+ */
+function orderbox_food_total(): float {
+	return (float) WC()->cart->get_cart_contents_total() + (float) WC()->cart->get_cart_contents_tax();
+}
+
+/**
+ * True when the cart is a delivery order below the tenant's minimum.
+ * An unknown/empty shipping choice counts as delivery — fail closed: the
+ * customer can always switch to collection, but a session hiccup must not
+ * waive the minimum.
+ */
+function orderbox_delivery_below_minimum(): bool {
+	if ( ORDERBOX_DELIVERY_MINIMUM <= 0 ) return false;
+	if ( ! function_exists( 'WC' ) || ! WC()->cart || WC()->cart->is_empty() ) return false;
+	if ( ! WC()->cart->needs_shipping() ) return false;
+
+	$chosen = WC()->session ? (array) WC()->session->get( 'chosen_shipping_methods' ) : [];
+	$method = (string) ( $chosen[0] ?? '' );
+	if ( $method !== '' && strpos( $method, 'local_pickup' ) !== false ) return false;
+
+	return orderbox_food_total() < ORDERBOX_DELIVERY_MINIMUM;
+}
+
+function orderbox_delivery_minimum_message( bool $html = true ): string {
+	$remaining = max( 0, ORDERBOX_DELIVERY_MINIMUM - orderbox_food_total() );
+	$msg = sprintf(
+		'The minimum order for delivery is %1$s. Please add another %2$s to your basket, or switch to collection.',
+		wc_price( ORDERBOX_DELIVERY_MINIMUM ),
+		wc_price( $remaining )
+	);
+	return $html ? $msg : html_entity_decode( wp_strip_all_tags( $msg ), ENT_QUOTES );
+}
+
+// Inline warning in the checkout payment area — sits inside the fragment
+// WooCommerce re-renders on update_checkout, so it tracks delivery/collection
+// switches live.
+add_action( 'woocommerce_review_order_before_payment', function () {
+	if ( ! orderbox_delivery_below_minimum() ) return;
+	echo '<div class="woocommerce-error" role="alert" style="margin-bottom:15px;">'
+		. orderbox_delivery_minimum_message() . '</div>';
+} );
+
+// Replace the Place order button while below the minimum.
+add_filter( 'woocommerce_order_button_html', function ( $button_html ) {
+	if ( ! orderbox_delivery_below_minimum() ) return $button_html;
+	return '<button type="button" class="button alt" disabled="disabled" aria-disabled="true"'
+		. ' style="opacity:0.55; cursor:not-allowed; width:100%;">'
+		. sprintf( 'Minimum %s required for delivery', wp_strip_all_tags( wc_price( ORDERBOX_DELIVERY_MINIMUM ) ) )
+		. '</button>';
+} );
+
+// Server-side enforcement — classic checkout.
+add_action( 'woocommerce_checkout_process', function () {
+	if ( orderbox_delivery_below_minimum() ) {
+		wc_add_notice( orderbox_delivery_minimum_message(), 'error' );
+	}
+} );
+
+// Server-side enforcement — Store API checkout. Apple/Google Pay express
+// checkout never runs woocommerce_checkout_process, so without this hook the
+// minimum is unenforced for exactly those orders. The error surfaces inside
+// the payment sheet.
+add_action( 'woocommerce_store_api_cart_errors', function ( $errors ) {
+	if ( orderbox_delivery_below_minimum() ) {
+		$errors->add( 'orderbox_delivery_minimum', orderbox_delivery_minimum_message( false ) );
+	}
+}, 10, 1 );
+
 // ── Express checkout (Apple/Google Pay) delivery-date defaults ────────────────
 // WooCommerce Blocks Store API checkout (used by the Stripe Payment Request
 // Button for Apple/Google Pay) never touches the visible checkout form, so the

@@ -30,6 +30,7 @@ services:
       WORDPRESS_DB_NAME: wordpress
       ORDERBOX_API_URL: ${ORDERBOX_API_URL:-http://orderbox_api:3000}
       ORDERBOX_SUBDOMAIN: ${SUBDOMAIN:-demo}
+      ORDERBOX_DELIVERY_MINIMUM: ${ORDERBOX_DELIVERY_MINIMUM:-0}
     volumes:
       - wp_data:/var/www/html
       - ${MU_PLUGINS_PATH:-./mu-plugins}:/var/www/html/wp-content/mu-plugins
