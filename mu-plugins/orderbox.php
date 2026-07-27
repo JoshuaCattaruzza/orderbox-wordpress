@@ -123,6 +123,11 @@ add_filter( 'woocommerce_add_to_cart_validation', function ( bool $passed ): boo
 	return $passed;
 }, 10, 1 );
 
+// Cap revisions at 5 per post. Elementor stores the full page JSON in every
+// revision (content + _elementor_data meta), and unlimited revisions grew two
+// tables to ~95MB for an 11-page site. 5 undo states is plenty.
+if ( ! defined( 'WP_POST_REVISIONS' ) ) define( 'WP_POST_REVISIONS', 5 );
+
 // Keep completed/cancelled/failed Action Scheduler rows for 7 days instead of
 // the default 31 — with async webhook delivery every order generates several
 // actions (each with ~3 log rows), and a month of retention bloated the DB to
