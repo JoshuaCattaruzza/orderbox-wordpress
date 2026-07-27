@@ -149,7 +149,12 @@ add_action( 'wp', function () {
 	if ( isset( $_GET['order_type'] ) ) {
 		$type = sanitize_key( $_GET['order_type'] );
 		if ( in_array( $type, [ 'delivery', 'collection' ], true ) ) {
-			setcookie( 'orderbox_order_type', $type, 0, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true );
+			// httponly is deliberately FALSE: the checkout script reads this to
+			// decide whether to show the address fields. It holds nothing but
+			// "delivery" or "collection", so there is nothing to protect, and
+			// leaving it httponly silently broke the collection checkout —
+			// the script could never read it, so the fields never hid.
+			setcookie( 'orderbox_order_type', $type, 0, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), false );
 			$_COOKIE['orderbox_order_type'] = $type;
 			if ( function_exists( 'WC' ) && WC()->session ) {
 				WC()->session->set( 'chosen_shipping_methods', [] );
@@ -180,7 +185,7 @@ add_filter( 'woocommerce_shipping_chosen_method', function ( $default, $rates ) 
 
 // Clear the cookie once the order is placed.
 add_action( 'woocommerce_thankyou', function () {
-	setcookie( 'orderbox_order_type', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true );
+	setcookie( 'orderbox_order_type', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), false );
 	unset( $_COOKIE['orderbox_order_type'] );
 } );
 
@@ -419,9 +424,17 @@ add_action( 'wp_footer', function () {
 		// address fields, and removed the only way to enter the town that would
 		// have made Delivery appear. A closed loop that trapped customers on
 		// Collection.
+		// PHP hands us the value it can see server-side. That matters for
+		// customers still carrying the older httponly cookie, which the browser
+		// will not expose to script — without this fallback the fields would
+		// never hide for them until they passed through the order-type page
+		// again. The live cookie wins when it is readable, so a change made
+		// here on the checkout page takes effect straight away.
+		var orderboxType = <?php echo wp_json_encode( (string) ( $_COOKIE['orderbox_order_type'] ?? '' ) ); ?>;
+
 		function orderboxOrderType() {
 			var m = document.cookie.match( /(?:^|;\s*)orderbox_order_type=([^;]*)/ );
-			return m ? decodeURIComponent( m[1] ) : '';
+			return m ? decodeURIComponent( m[1] ) : orderboxType;
 		}
 
 		function orderboxApplyOrderType() {
@@ -444,6 +457,7 @@ add_action( 'wp_footer', function () {
 		$( document ).on( 'change', 'input[name^="shipping_method"]', function () {
 			var val = String( $( this ).val() || '' );
 			var type = val.indexOf( 'local_pickup' ) !== -1 ? 'collection' : 'delivery';
+			orderboxType = type;
 			document.cookie = 'orderbox_order_type=' + type + ';path=/;max-age=86400;samesite=lax';
 			orderboxApplyOrderType();
 		} );
