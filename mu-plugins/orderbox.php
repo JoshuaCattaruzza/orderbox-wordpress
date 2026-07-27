@@ -372,6 +372,56 @@ add_action( 'wp_footer', function () {
 	<?php
 } );
 
+// ── Payment method wording for collection orders ──────────────────────────────
+// The COD gateway is configured with delivery wording ("Pay with cash upon
+// delivery."), which collection customers saw too. WooCommerce runs the
+// description through woocommerce_gateway_description, and the payment box is
+// inside the #order_review fragment that update_checkout re-renders, so a PHP
+// filter here tracks the customer's Delivery/Collection choice live with no JS.
+add_filter( 'woocommerce_gateway_description', function ( $description, $gateway_id ) {
+	if ( 'cod' !== $gateway_id || ! orderbox_is_collection() ) return $description;
+	return 'Pay with cash when you collect your order.';
+}, 10, 2 );
+
+// ── Stripe gateway label ──────────────────────────────────────────────────────
+// With Stripe's Optimized Checkout Suite enabled, the gateway renders as the
+// literal string "Stripe" until its JS mounts and swaps in the real payment UI.
+// That string is a hardcoded private constant (DEFAULT_TITLE in
+// class-wc-stripe-upe-payment-method-oc.php) returned by a get_title() override
+// that never calls parent::get_title(), so it is reachable by neither a gateway
+// setting (the field no longer exists in Stripe 10.x) nor the standard
+// woocommerce_gateway_title filter. Relabelling in JS is the only seam left.
+// Re-applied on updated_checkout and on payment-method change because Stripe's
+// own script rewrites this area when the method is selected.
+add_action( 'wp_footer', function () {
+	if ( ! function_exists( 'is_checkout' ) || ! is_checkout() || is_order_received_page() ) return;
+	?>
+	<script>
+	jQuery( function ( $ ) {
+		function orderboxRelabelStripe() {
+			var el = document.querySelector( 'label[for="payment_method_stripe"]' );
+			if ( ! el ) return;
+			// Swap only the leading text node so the gateway's card icons survive.
+			for ( var i = 0; i < el.childNodes.length; i++ ) {
+				var n = el.childNodes[ i ];
+				if ( n.nodeType === 3 && n.nodeValue.trim() !== '' ) {
+					if ( n.nodeValue.trim() === 'Stripe' ) {
+						n.nodeValue = n.nodeValue.replace( 'Stripe', 'Pay With Card' );
+					}
+					return;
+				}
+			}
+		}
+		$( document.body ).on( 'updated_checkout payment_method_selected', orderboxRelabelStripe );
+		$( document ).on( 'change', 'input[name="payment_method"]', function () {
+			setTimeout( orderboxRelabelStripe, 0 );
+		} );
+		orderboxRelabelStripe();
+	} );
+	</script>
+	<?php
+} );
+
 // ── Express checkout (Apple/Google Pay) delivery-date defaults ────────────────
 // WooCommerce Blocks Store API checkout (used by the Stripe Payment Request
 // Button for Apple/Google Pay) never touches the visible checkout form, so the
