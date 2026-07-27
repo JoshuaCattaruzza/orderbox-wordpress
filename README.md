@@ -61,11 +61,21 @@ if ( $_SERVER['HTTP_HOST'] === 'wp_app' ) { $_SERVER['HTTPS'] = 'on'; }
 
 WooCommerce REST API only accepts Basic Auth over HTTPS. In local Docker, traffic is plain HTTP internally. This condition is a no-op in production where real HTTPS is in place.
 
-### 3. Synchronous webhook delivery
+### 3. Webhook delivery: synchronous, with a REST-context exception
 
-WooCommerce normally delivers webhooks via WP-Cron, which only fires on page loads. This causes a delay: the order doesn't reach the Pi until the customer navigates away from the thank-you page.
+WooCommerce normally delivers webhooks via WP-Cron/Action Scheduler, which
+delays the order reaching the Pi. The mu-plugin forces synchronous delivery
+(`woocommerce_webhook_deliver_async` → false) for classic checkouts — **except**
+when the checkout itself runs inside a REST dispatch (WooCommerce Blocks /
+Store API, i.e. Apple/Google Pay express checkout): synchronous delivery
+there corrupts the payload via a nested `rest_do_request` that 404s, so
+those fall back to async.
 
-The mu-plugin hooks `woocommerce_checkout_order_created` to fire the webhook synchronously during checkout — the order reaches the API before the thank-you page renders. It also hooks `woocommerce_order_status_changed` to keep WC's own webhook system in sync and handles the COD-specific messaging.
+Backstopping the async path, `DISABLE_WP_CRON` is set and a real system cron
+on the VM hits `wp-cron.php` every minute (see `orderbox-terraform/startup.sh`),
+so Action Scheduler work has a predictable upper bound instead of "whenever a
+page load happens". The API side also reconciles missed webhooks every 5
+minutes as a final safety net.
 
 ### 4. Pause / resume
 
@@ -75,22 +85,66 @@ On every storefront page request, the mu-plugin calls `GET /public/{subdomain}/s
 - Hooks `woocommerce_add_to_cart_validation` → blocks add-to-cart
 - Hooks `woocommerce_checkout_process` → blocks checkout with a notice
 
-Fail-open: if the API is unreachable, the store stays open.
+Fail-open: if the API is unreachable, the store stays open. The status the
+API reports is `pause_active OR pi_offline_auto_paused` — the storefront also
+pauses automatically when the restaurant's Pi has been offline for ~90s (and
+resumes on its next request), indistinguishable from a staff pause on this side.
 
 ### 5. Order type → shipping method pre-selection
 
 When a customer selects Collection or Delivery on the order-type landing page, the choice is stored in a cookie. At checkout, the mu-plugin reads the cookie and pre-selects the matching WooCommerce shipping method. When the order type changes, the previous WC session shipping choice is cleared so the new method takes effect cleanly.
 
-### 6. Live order tracking banner (thank-you page)
+### 6. Live order tracking (thank-you page)
 
-After checkout, the thank-you page shows a live status banner polling `GET /track/{subdomain}/{woo_order_id}?key={order_key}` every few seconds. The banner updates as the order moves through `NEW → ACCEPTED → PRINTED → COMPLETED`, giving the customer real-time feedback without requiring a login.
+After checkout, a full-page overlay polls
+`GET /track/{subdomain}/{woo_order_id}?key={order_key}` (browser-side, so it
+uses `ORDERBOX_PUBLIC_API_URL`) until the restaurant accepts or declines,
+then swaps to an inline result banner. If no terminal status arrives within
+90 seconds (API unreachable, slow restaurant), the overlay drops to a soft
+"order received" banner rather than trapping the customer — polling continues
+in the background.
+
+### 7. Express checkout (Apple/Google Pay) delivery-date defaults
+
+The Stripe Payment Request Button checks out via the Store API without ever
+touching the visible checkout form, so orddd_lite's required delivery-date
+fields arrive empty and fail validation. Detected via the
+`express_payment_type` key in `payment_data`; defaults are injected before
+the plugin's validation runs.
+
+### 8. Delivery minimum order
+
+Per-tenant minimum food total for **delivery** orders (collection exempt),
+set via `ORDERBOX_DELIVERY_MINIMUM` (0/unset = disabled). The subtotal used
+is post-discount and tax-inclusive. Enforced in three places: an inline
+warning + disabled Place-order button on classic checkout, a
+`woocommerce_checkout_process` notice, and — critically — a
+`woocommerce_store_api_cart_errors` hook so Apple/Google Pay express checkout
+is covered too (the classic hooks never fire for it). Unknown shipping state
+counts as delivery (fail closed).
+
+### 9. Collection checkout: name + contact only
+
+For collection orders the billing address fields are hidden (JS toggle, live
+on method switch) and made optional server-side — only name, phone, email
+remain. The shared `orderbox_is_collection()` helper (chosen shipping method,
+falling back to the order-type cookie) drives both this and the minimum.
+Also renames the checkout shipping section to "Delivery Options".
+
+### 10. Housekeeping
+
+`WP_POST_REVISIONS = 5` (Elementor stores the full page JSON per revision —
+unlimited revisions once grew the DB to ~95MB for 11 pages) and Action
+Scheduler retention cut to 7 days.
 
 ### Configuration
 
 | Constant / Env var | Default | Description |
 |---|---|---|
-| `ORDERBOX_API_URL` | `http://orderbox_api:3000` | OrderBox API base URL. In prod, set to the Cloud Run URL via the Docker env var or `wp-config.php` constant. |
+| `ORDERBOX_API_URL` | `http://orderbox_api:3000` | OrderBox API base URL (server-side calls). In prod, set to the Cloud Run URL via the Docker env var or `wp-config.php` constant. |
+| `ORDERBOX_PUBLIC_API_URL` | falls back to `ORDERBOX_API_URL` | Browser-reachable API origin for client-side polling (order tracking) — needed in local dev where `ORDERBOX_API_URL` is a Docker-internal hostname. |
 | `ORDERBOX_SUBDOMAIN` | `demo` | Tenant subdomain. Must match `tenants.subdomain` in the API database. |
+| `ORDERBOX_DELIVERY_MINIMUM` | `0` (disabled) | Minimum post-discount, tax-inclusive food total for delivery orders. Collection always exempt. |
 
 Both can be set as environment variables (via Docker Compose `.env`) or as `wp-config.php` constants — constants take precedence.
 
