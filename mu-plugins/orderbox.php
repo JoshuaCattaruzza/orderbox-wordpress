@@ -159,14 +159,21 @@ add_action( 'wp', function () {
 } );
 
 // Pre-select the matching shipping method at checkout based on the cookie.
-// flat_rate:2 = Delivery, local_pickup:1 = Collection.
+// Keyed on local_pickup — collection is the local_pickup rate, delivery is
+// whatever else is offered. Never hardcode the delivery method id: this store
+// delivers via `city_zip_based_shipping_method`, not flat_rate, and an earlier
+// version of this filter looked for a flat_rate that does not exist, so
+// delivery was never pre-selected and customers fell through to whatever
+// WooCommerce defaulted to. Same rule as the API's delivery_type
+// classification, so the two can't disagree.
 add_filter( 'woocommerce_shipping_chosen_method', function ( $default, $rates ) {
 	$type = $_COOKIE['orderbox_order_type'] ?? '';
 	if ( ! $type ) return $default;
 
-	$prefer = $type === 'delivery' ? 'flat_rate' : 'local_pickup';
+	$want_pickup = ( $type === 'collection' );
 	foreach ( $rates as $rate_id => $rate ) {
-		if ( $rate->method_id === $prefer ) return $rate_id;
+		$is_pickup = strpos( $rate->method_id, 'local_pickup' ) !== false;
+		if ( $is_pickup === $want_pickup ) return $rate_id;
 	}
 	return $default;
 }, 10, 2 );
@@ -287,13 +294,30 @@ add_action( 'woocommerce_store_api_cart_errors', function ( $errors ) {
 
 // The billing_* field wrappers hidden for collection. Kept in one place so
 // the PHP filter and the JS toggle below can never disagree.
+// NOTE: billing_city and billing_postcode are deliberately NOT hidden. This
+// store's delivery rate (`city_zip_based_shipping_method`) decides whether it
+// can deliver from the city/postcode, so with those fields hidden a customer
+// with no address on file has no delivery rate offered — leaving Collection as
+// the only option, with no way to enter the postcode that would bring Delivery
+// back. That deadlocked checkout into Collection. They stay visible and remain
+// optional for collection orders.
 const ORDERBOX_COLLECTION_HIDDEN_FIELDS = [
 	'billing_company',
 	'billing_country',
 	'billing_address_1',
 	'billing_address_2',
-	'billing_city',
 	'billing_state',
+];
+
+// Made optional for collection (a superset of the hidden ones — city and
+// postcode stay on screen but must not block a collection checkout).
+const ORDERBOX_COLLECTION_OPTIONAL_FIELDS = [
+	'billing_company',
+	'billing_country',
+	'billing_address_1',
+	'billing_address_2',
+	'billing_state',
+	'billing_city',
 	'billing_postcode',
 ];
 
@@ -304,7 +328,7 @@ const ORDERBOX_COLLECTION_HIDDEN_FIELDS = [
 // stale requirement in either direction.
 add_filter( 'woocommerce_checkout_fields', function ( $fields ) {
 	if ( ! orderbox_is_collection() ) return $fields;
-	foreach ( ORDERBOX_COLLECTION_HIDDEN_FIELDS as $key ) {
+	foreach ( ORDERBOX_COLLECTION_OPTIONAL_FIELDS as $key ) {
 		if ( isset( $fields['billing'][ $key ] ) ) {
 			$fields['billing'][ $key ]['required'] = false;
 		}
