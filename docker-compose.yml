@@ -10,6 +10,10 @@ services:
   db:
     image: mysql:8.0
     restart: unless-stopped
+    # Default buffer pool is 128M; 384M keeps the whole working set in RAM on
+    # the 2GB VM. Applying this requires recreating the db container (brief
+    # site outage while MySQL restarts) — data lives in the volume, unaffected.
+    command: --innodb-buffer-pool-size=384M
     environment:
       MYSQL_DATABASE: wordpress
       MYSQL_USER: wordpress
