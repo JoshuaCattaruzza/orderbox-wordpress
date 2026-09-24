@@ -136,6 +136,28 @@ add_filter( 'action_scheduler_retention_period', function () {
 	return 7 * DAY_IN_SECONDS;
 } );
 
+// Self-heal a poisoned shipping-method count. WooCommerce caches how many
+// shipping methods exist in the wc_shipping_method_count transient for 30
+// days, and needs_shipping()/show_shipping() return false when it's 0. If
+// MySQL is down when that count is computed (it was OOM-killed on 2026-09-24),
+// the COUNT(*) returns null → absint 0 → "this store doesn't ship" is cached
+// for a month: the whole Delivery Options section vanishes from checkout and
+// every order arrives with no shipping line, i.e. as collection. When the
+// cached count is 0, confirm against the table and drop the cache if it's
+// wrong. A healthy count never reaches the query, so this costs nothing
+// normally; if the DB is still failing, get_var() returns null and we leave
+// the cache alone rather than guess.
+add_action( 'woocommerce_init', function () {
+	$cached = get_transient( 'wc_shipping_method_count' );
+	if ( ! is_array( $cached ) || ! empty( $cached['enabled'] ) || ! empty( $cached['legacy'] ) ) return;
+
+	global $wpdb;
+	$real = $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->prefix}woocommerce_shipping_zone_methods WHERE is_enabled = 1" );
+	if ( null !== $real && (int) $real > 0 ) {
+		delete_transient( 'wc_shipping_method_count' );
+	}
+} );
+
 // ── Order type pre-selection ──────────────────────────────────────────────────
 // The order-type page links to /menu?order_type=delivery|collection.
 // We persist that choice in a cookie and use it to pre-select the right
