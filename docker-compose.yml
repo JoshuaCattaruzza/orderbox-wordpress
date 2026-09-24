@@ -15,6 +15,11 @@ services:
       MYSQL_USER: wordpress
       MYSQL_PASSWORD: ${DB_PASSWORD:-wordpress}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    # Per-container memory caps (TODO/TASK-vm-memory-hardening.md §2.2): a
+    # runaway container is OOM-killed on its own and restarted instead of
+    # dragging the whole VM down. mysqld was at ~683MB RSS when the kernel
+    # killed it on 2026-09-24, so this leaves it real headroom.
+    mem_limit: 1536m
     volumes:
       - db_data:/var/lib/mysql
 
@@ -31,9 +36,14 @@ services:
       ORDERBOX_API_URL: ${ORDERBOX_API_URL:-http://orderbox_api:3000}
       ORDERBOX_SUBDOMAIN: ${SUBDOMAIN:-demo}
       ORDERBOX_DELIVERY_MINIMUM: ${ORDERBOX_DELIVERY_MINIMUM:-0}
+    # Sized with apache/mpm_prefork.conf: 30 workers × PHP's 128M limit is
+    # under this cap, so Apache queues requests under load rather than
+    # growing until the cgroup kills it.
+    mem_limit: 3g
     volumes:
       - wp_data:/var/www/html
       - ${MU_PLUGINS_PATH:-./mu-plugins}:/var/www/html/wp-content/mu-plugins
+      - ./apache/mpm_prefork.conf:/etc/apache2/mods-available/mpm_prefork.conf:ro
 
 volumes:
   wp_data:
